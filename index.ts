@@ -1,8 +1,19 @@
 import "dotenv/config";
 import express from "express";
-import { Client, Collection, GatewayIntentBits, REST, Routes } from "discord.js";
+import {
+    Client,
+    Collection,
+    GatewayIntentBits,
+    REST,
+    Routes,
+    ActivityType
+} from "discord.js";
 import { readdirSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const client = new Client({
     intents: [
@@ -21,8 +32,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const PORT = Number(process.env.PORT) || 3000;
-const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = process.env.CLIENT_ID;
+const TOKEN = process.env.DISCORD_TOKEN ?? "";
+const CLIENT_ID = process.env.CLIENT_ID ?? "";
 
 if (!TOKEN) {
     throw new Error("DISCORD_TOKEN is missing from .env");
@@ -39,13 +50,14 @@ async function loadCommands() {
 
     try {
         const files = readdirSync(commandsPath).filter(
-            file => file.endsWith(".ts") || file.endsWith(".js")
+            file =>
+                (file.endsWith(".ts") || file.endsWith(".js")) &&
+                !file.endsWith(".d.ts")
         );
 
         for (const file of files) {
             const filePath = join(commandsPath, file);
             const command = await import(filePath);
-
             const data = command.default ?? command;
 
             if (!data?.data || !data?.execute) {
@@ -59,6 +71,7 @@ async function loadCommands() {
         }
     } catch (error) {
         console.error("[Commands] Failed to load commands:", error);
+        throw error;
     }
 }
 
@@ -67,13 +80,16 @@ async function loadMessages() {
 
     try {
         const files = readdirSync(messagesPath).filter(
-            file => file.endsWith(".ts") || file.endsWith(".js")
+            file =>
+                (file.endsWith(".ts") || file.endsWith(".js")) &&
+                !file.endsWith(".d.ts") &&
+                file !== "messageCreate.ts" &&
+                file !== "messageCreate.js"
         );
 
         for (const file of files) {
             const filePath = join(messagesPath, file);
             const message = await import(filePath);
-
             const handler = message.default ?? message;
 
             if (typeof handler !== "function") {
@@ -87,6 +103,7 @@ async function loadMessages() {
         }
     } catch (error) {
         console.error("[Messages] Failed to load:", error);
+        throw error;
     }
 }
 
@@ -95,13 +112,14 @@ async function loadAPI() {
 
     try {
         const files = readdirSync(apiPath).filter(
-            file => file.endsWith(".ts") || file.endsWith(".js")
+            file =>
+                (file.endsWith(".ts") || file.endsWith(".js")) &&
+                !file.endsWith(".d.ts")
         );
 
         for (const file of files) {
             const filePath = join(apiPath, file);
             const api = await import(filePath);
-
             const register = api.default ?? api.register;
 
             if (typeof register !== "function") {
@@ -115,6 +133,7 @@ async function loadAPI() {
         }
     } catch (error) {
         console.error("[API] Failed to load:", error);
+        throw error;
     }
 }
 
@@ -158,30 +177,39 @@ async function registerCommands() {
         commands.push(command.data.toJSON());
     }
 
-    const rest = new REST({ version: "10" }).setToken(TOKEN!);
+    const rest = new REST({ version: "10" }).setToken(TOKEN);
 
     await rest.put(
-        Routes.applicationCommands(CLIENT_ID!),
+        Routes.applicationCommands(CLIENT_ID),
         {
             body: commands
         }
     );
 
-    console.log(`[Commands] Registered ${commands.length} global commands`);
+    console.log(
+        `[Commands] Registered ${commands.length} global commands`
+    );
 }
 
-client.once("ready", async () => {
-    console.log(`[Discord] Logged in as ${client.user?.tag}`);
+client.once("ready", () => {
+    if (!client.user) {
+        return;
+    }
 
-    client.user?.setPresence({
+    console.log(`[Discord] Logged in as ${client.user.tag}`);
+
+    client.user.setPresence({
         activities: [
             {
                 name: "Protecting your servers.",
-                type: 3
+                type: ActivityType.Custom,
+                state: "Protecting your servers."
             }
         ],
         status: "dnd"
     });
+
+    console.log("[Discord] Custom status set");
 });
 
 client.on("interactionCreate", async interaction => {
@@ -225,7 +253,6 @@ async function start() {
         await loadCommands();
         await loadMessages();
         await loadAPI();
-
         await registerCommands();
 
         app.listen(PORT, () => {
